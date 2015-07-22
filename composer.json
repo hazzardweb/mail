@@ -1,0 +1,12 @@
+{
+    "name": "hazzard/mail",
+    "require": {
+        "php": ">=5.3",
+        "swiftmailer/swiftmailer": "^5.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "Hazzard\\Mail\\": "src/"
+        }
+    }
+}
