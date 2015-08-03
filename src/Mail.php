@@ -2,213 +2,183 @@
 
 namespace Hazzard\Mail;
 
-use ArrayAccess;
 use Swift_Mailer;
-use GuzzleHttp\Client;
-use InvalidArgumentException;
-use Hazzard\Mail\Transport\LogTransport;
-use Swift_SmtpTransport as SmtpTransport;
-use Swift_MailTransport as MailTransport;
-use Hazzard\Mail\Transport\MailgunTransport;
-use Hazzard\Mail\Transport\MandrillTransport;
-use Swift_SendmailTransport as SendmailTransport;
+use Illuminate\Mail\Mailer;
+use Illuminate\Container\Container;
+use Illuminate\Mail\TransportManager;
 
 class Mail
 {
     /**
-     * @var mixed
-     */
-    protected $config;
-
-    /**
-     * @var \Hazzard\Mail\Mailer
+     * @var \Illuminate\Contracts\Mail\Mailer
      */
     protected $mailer;
 
     /**
-     * @var array
+     * The current globally used instance.
+     *
+     * @var object
      */
-    protected $drivers = array();
+    protected static $instance;
 
     /**
-     * Create a new mail instance.
-     *
-     * @param mixed $config
+     * @var \Illuminate\Contracts\Container\Container
      */
-    public function __construct($config)
+    protected $app;
+
+    /**
+     * Create a new instance.
+     *
+     * @param \Illuminate\Contracts\Container\Container $container
+     */
+    public function __construct(Container $container)
     {
-        $this->config = $config;
+        $this->app = $container;
+
         $this->register();
     }
 
     /**
-     * Get the mailer instance.
-     *
-     * @return \Hazzard\Mail\Mailer
-     */
-    public function mailer()
-    {
-        return $this->mailer;
-    }
-
-    /**
-     * Get a driver instance.
-     *
-     * @param  string $driver
-     * @return mixed
-     */
-    public function driver($driver = null)
-    {
-        $driver = $driver ?: $this->config('driver');
-
-        if (!isset($this->drivers[$driver])) {
-            $this->drivers[$driver] = $this->createNewDriver($driver);
-        }
-
-        return $this->drivers[$driver];
-    }
-
-    /**
-     * Register the Mailer instance.
+     * Register the mailer.
      *
      * @return void
      */
     protected function register()
     {
-        $swift = new Swift_Mailer($this->driver());
+        if (!$this->app->bound('view')) {
+            $this->app['view'] = new ViewFactory;
+        }
 
-        $this->mailer = new Mailer($swift);
+        $this->registerSwiftMailer();
 
-        $from = $this->config('from');
+        $this->mailer = new Mailer(
+            $this->app['view'], $this->app['swift.mailer'], $this->app['events']
+        );
+
+        $this->setMailerDependencies();
+
+        $from = $this->app['config']['mail.from'];
+
         if (is_array($from) && isset($from['address'])) {
             $this->mailer->alwaysFrom($from['address'], $from['name']);
         }
 
-        $to = $this->config('to');
+        $to = $this->app['config']['mail.to'];
+
         if (is_array($to) && isset($to['address'])) {
             $this->mailer->alwaysTo($to['address'], $to['name']);
         }
     }
 
     /**
-     * Create an instance of the SMTP Swift Transport driver.
+     * Set a few dependencies on the mailer instance.
      *
-     * @return \Swift_SmtpTransport
+     * @return void
      */
-    protected function createSmtpDriver()
+    protected function setMailerDependencies()
     {
-        $config = $this->config();
+        $this->mailer->setContainer($this->app);
 
-        $transport = SmtpTransport::newInstance($config['host'], $config['port']);
-
-        if (isset($config['encryption'])) {
-            $transport->setEncryption($config['encryption']);
+        if ($this->app->bound('Psr\Log\LoggerInterface')) {
+            $this->mailer->setLogger($this->app->make('Psr\Log\LoggerInterface'));
         }
 
-        if (isset($config['username'])) {
-            $transport->setUsername($config['username']);
-            $transport->setPassword($config['password']);
+        if ($this->app->bound('queue')) {
+            $this->mailer->setQueue($this->app['queue.connection']);
         }
-
-        return $transport;
     }
 
     /**
-     * Create an instance of the Sendmail Swift Transport driver.
+     * Register the Swift Mailer instance.
      *
-     * @return \Swift_SendmailTransport
+     * @return void
      */
-    protected function createSendmailDriver()
+    protected function registerSwiftMailer()
     {
-        $command = $this->config('sendmail');
+        $this->registerSwiftTransport();
 
-        return SendmailTransport::newInstance($command);
+        $this->app['swift.mailer'] = $this->app->share(function ($app) {
+            return new Swift_Mailer($app['swift.transport']->driver());
+        });
     }
 
     /**
-     * Create an instance of the Mail Swift Transport driver.
+     * Register the Swift Transport instance.
      *
-     * @return \Swift_MailTransport
+     * @return void
      */
-    protected function createMailDriver()
+    protected function registerSwiftTransport()
     {
-        return MailTransport::newInstance();
+        $this->app['swift.transport'] = $this->app->share(function ($app) {
+            return new TransportManager($app);
+        });
     }
 
     /**
-     * Create an instance of the Mailgun Swift Transport driver.
+     * Set view storage path.
      *
-     * @return \Illuminate\Mail\Transport\MailgunTransport
+     * @param  string $path
+     * @return void
      */
-    protected function createMailgunDriver()
+    public function setViewStoragePath($path)
     {
-        $config = $this->config('mailgun', array());
-
-        return new MailgunTransport(new Client, $config['secret'], $config['domain']);
+        $this->app['view']->setStoragePath($path);
     }
 
     /**
-     * Create an instance of the Mandrill Swift Transport driver.
+     * Make this instance available globally.
      *
-     * @return \Illuminate\Mail\Transport\MandrillTransport
+     * @return void
      */
-    protected function createMandrillDriver()
+    public function setAsGlobal()
     {
-        $config = $this->config('mandrill', array());
-
-        return new MandrillTransport(new Client, $config['secret']);
+        static::$instance = $this;
     }
 
     /**
-     * Create an instance of the Log Swift Transport driver.
+     * Create a class alias.
      *
-     * @return \Hazzard\Mail\Transport\LogTransport
+     * @param  string $alias
+     * @return void
      */
-    protected function createLogDriver()
+    public function classAlias($alias = 'Mail')
     {
-        return new LogTransport($this->config('log'));
+        class_alias(get_class($this), $alias);
     }
 
     /**
-     * Create a new driver instance.
+     * Get the validation factory instance.
      *
-     * @param  string $driver
-     * @return mixed
-     *
-     * @throws \InvalidArgumentException
+     * @return \Illuminate\Contracts\Mail\Mailer
      */
-    protected function createNewDriver($driver)
+    public function getMailer()
     {
-        $method = 'create'.ucfirst($driver).'Driver';
-
-        if (method_exists($this, $method)) {
-            return $this->$method();
-        }
-
-        throw new InvalidArgumentException("Driver [$driver] not supported.");
+        return $this->mailer;
     }
 
     /**
-     * Get the specified configuration value.
+     * Call mailer methods dynamically.
      *
-     * @param  string $key
-     * @param  mixed  $default
+     * @param  string $method
+     * @param  array  $arguments
      * @return mixed
      */
-    protected function config($key = null, $default = null)
+    public function __call($method, $arguments)
     {
-        if ($this->config instanceof ArrayAccess) {
-            if (is_null($key)) {
-                return $this->config['mail'];
-            }
+        return call_user_func_array([$this->mailer, $method], $arguments);
+    }
 
-            return isset($this->config["mail.$key"]) ? $this->config["mail.$key"] : $default;
-        }
+    /**
+     * Call static mailer methods dynamically.
+     *
+     * @param  string $method
+     * @param  array  $arguments
+     * @return mixed
+     */
+    public static function __callStatic($method, $arguments)
+    {
+        $mailer = static::$instance->getMailer();
 
-        if (is_null($key)) {
-            return $this->config;
-        }
-
-        return isset($this->config[$key]) ? $this->config[$key] : $default;
+        return call_user_func_array([$mailer, $method], $arguments);
     }
 }

@@ -1,8 +1,16 @@
 {
     "name": "hazzard/mail",
+    "description": "Use Illuminate Mail outside Laravel.",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Cretu Eusebiu",
+            "email": "cretu.eusebiu@gmail.com"
+        }
+    ],
     "require": {
-        "php": ">=5.3",
-        "swiftmailer/swiftmailer": "^5.4"
+        "php": ">=5.4",
+        "illuminate/mail": "5.0.*|5.1.*"
     },
     "autoload": {
         "psr-4": {
