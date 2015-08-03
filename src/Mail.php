@@ -118,11 +118,13 @@ class Mail
      * Set view storage path.
      *
      * @param  string $path
-     * @return void
+     * @return $this
      */
     public function setViewStoragePath($path)
     {
         $this->app['view']->setStoragePath($path);
+
+        return $this;
     }
 
     /**
